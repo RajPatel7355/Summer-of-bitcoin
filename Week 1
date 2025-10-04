@@ -1,0 +1,242 @@
+# from bitcoinrpc.authproxy import AuthServiceProxy
+# import time
+# from decimal import Decimal
+
+# # Connection Configuration for Bitcoin RPC
+# USERNAME = "alice"
+# PASSWORD = "password"
+# PORT = 18443  # Default port for regtest
+# HOST = "127.0.0.1"
+
+# # Establish RPC Connection
+# rpc_connection_url = f"http://{USERNAME}:{PASSWORD}@{HOST}:{PORT}"
+# bitcoin_rpc = AuthServiceProxy(rpc_connection_url)
+
+# # Verify Connection to Bitcoin Node
+# try:
+#     blockchain_details = bitcoin_rpc.getblockchaininfo()
+#     print("Successfully connected to the Bitcoin node!")
+#     print(f"Current block height: {blockchain_details['blocks']}")
+# except Exception as e:
+#     print(f"Failed to connect to the Bitcoin node: {e}")
+#     exit()
+
+# # Step 1: The Wallet Initialization
+# wallet_identifier = "testwallet"
+# loaded_wallets = bitcoin_rpc.listwallets()
+
+# if wallet_identifier not in loaded_wallets:
+#     print(f"Wallet '{wallet_identifier}' not found. Creating and loading it...")
+#     bitcoin_rpc.createwallet(wallet_identifier)
+#     time.sleep(10)  # Allow time for wallet creation and synchronization
+#     print(f"Wallet '{wallet_identifier}' created successfully.")
+# else:
+#     print(f"Wallet '{wallet_identifier}' is already loaded.")
+
+# # Now Connect to the Wallet's RPC Interface
+# wallet_rpc_url = f"http://{USERNAME}:{PASSWORD}@{HOST}:{PORT}/wallet/{wallet_identifier}"
+# wallet_rpc = AuthServiceProxy(wallet_rpc_url)
+
+# # Check the Initial Wallet Balance
+# initial_balance = wallet_rpc.getbalance()
+# print(f"Initial wallet balance: {initial_balance} BTC")
+
+# # Step 2: Generate Mining Address
+# time.sleep(5)  
+# mining_address = wallet_rpc.getnewaddress()
+# print(f"Mining address generated: {mining_address}")
+
+# # Validate Mining Address Ownership
+# address_info = wallet_rpc.getaddressinfo(mining_address)
+# print(f"Address info: {address_info}")
+# if not address_info["ismine"]:
+#     raise Exception(f"The mining address does not belong to the wallet: {mining_address}")
+# print("Mining address is valid and belongs to the wallet.")
+
+# #Mine Blocks to Fund Wallet
+# print("Mining 103 blocks to fund the wallet...")
+# wallet_rpc.generatetoaddress(103, mining_address)  # Mine 102 blocks to ensure sufficient funds
+# time.sleep(5)  # Wait for block generation
+
+# # Verify the Wallet Balance After Mining
+# post_mining_balance = wallet_rpc.getbalance()
+# print(f"Wallet balance after mining: {post_mining_balance} BTC")
+
+
+# unspent_outputs = wallet_rpc.listunspent()
+# print(f"Available UTXOs: {unspent_outputs}")
+
+# if post_mining_balance < 100:
+#     raise Exception(f"Insufficient funds in wallet! Current balance: {post_mining_balance} BTC")
+
+# # Select UTXOs for Transaction
+# target_amount = Decimal("100.0") 
+# selected_utxos = []
+# total_selected = Decimal("0")
+
+# for utxo in unspent_outputs:
+#     selected_utxos.append({
+#         "txid": utxo["txid"],
+#         "vout": utxo["vout"]
+#     })
+#     total_selected += Decimal(str(utxo["amount"]))
+#     if total_selected >= target_amount * Decimal("1.1"):  
+#         break
+
+# if total_selected < target_amount:
+#     raise Exception(f"Not enough funds! Available: {total_selected} BTC, Required: {target_amount} BTC")
+# print(f"Selected UTXOs with a total of {total_selected} BTC")
+
+# # Construct Transaction Outputs
+# destination_address = "bcrt1qq2yshcmzdlznnpxx258xswqlmqcxjs4dssfxt2"
+# op_return_message = "We are all Satoshi!!"
+# op_return_data = op_return_message.encode("utf-8")[:20].hex()  
+# transaction_outputs = {
+#     destination_address: float(target_amount),
+#     "data": op_return_data 
+# }
+# print(f"OP_RETURN data: {op_return_data} (20 bytes)")
+
+# # Calculate the Fees and Adjust Change
+# fee_per_vbyte = 21  
+# max_fee_attempts = 3
+# previous_fee = None
+
+# for attempt in range(max_fee_attempts):
+#     raw_transaction = wallet_rpc.createrawtransaction(selected_utxos, transaction_outputs)
+#     signed_transaction = wallet_rpc.signrawtransactionwithwallet(raw_transaction)
+#     decoded_transaction = wallet_rpc.decoderawtransaction(signed_transaction["hex"])
+#     transaction_size = decoded_transaction["vsize"]
+#     total_fee_sats = transaction_size * fee_per_vbyte
+#     total_fee_btc = Decimal(total_fee_sats) / Decimal(1e8)
+
+#     required_total = target_amount + total_fee_btc
+#     change_amount = total_selected - required_total
+
+#     if change_amount < 0:
+#         raise Exception(f"Insufficient funds! Need {required_total:.8f} BTC, Have: {total_selected:.8f} BTC")
+
+#     if change_amount > 0:
+#         if "change_address" not in locals():
+#             change_address = wallet_rpc.getnewaddress()
+#         transaction_outputs[change_address] = float(change_amount)
+#     else:
+#         if "change_address" in locals() and change_address in transaction_outputs:
+#             del transaction_outputs[change_address]
+
+#     if attempt > 0 and abs(previous_fee - total_fee_sats) < 10:
+#         break
+#     previous_fee = total_fee_sats
+
+# print(f" The Final transaction size: {transaction_size} vB")
+# print(f"Final fee: {total_fee_btc:.8f} BTC ({fee_per_vbyte} sats/vB)")
+
+# # Broadcast the Transaction
+# final_raw_tx = wallet_rpc.createrawtransaction(selected_utxos, transaction_outputs)
+# final_signed_tx = wallet_rpc.signrawtransactionwithwallet(final_raw_tx)
+
+# if not final_signed_tx["complete"]:
+#     raise Exception("Transaction signing failed!")
+
+# transaction_id = wallet_rpc.sendrawtransaction(final_signed_tx["hex"])
+# print(f"Transaction broadcasted! TXID: {transaction_id}")
+
+# # Save Transaction ID to File
+# with open("output.txt", "w") as file:
+#     file.write(transaction_id)
+# print(f" The Transaction ID get saved to the output.txt")
+
+from bitcoinrpc.authproxy import AuthServiceProxy
+import time
+from decimal import Decimal, getcontext
+
+# Configure precise decimal handling
+getcontext().prec = 8
+
+# Connection Configuration
+RPC_USER = "alice"
+RPC_PASSWORD = "password"
+RPC_PORT = 18443
+RPC_HOST = "127.0.0.1"
+
+def connect_rpc(wallet_name=None):
+    url = f"http://{RPC_USER}:{RPC_PASSWORD}@{RPC_HOST}:{RPC_PORT}"
+    if wallet_name:
+        url += f"/wallet/{wallet_name}"
+    return AuthServiceProxy(url)
+
+# Initialize connection and wallet
+try:
+    rpc = connect_rpc()
+    wallet_name = "testwallet"
+    
+    # Create wallet if needed
+    if wallet_name not in rpc.listwallets():
+        print(f"Creating wallet: {wallet_name}")
+        rpc.createwallet(wallet_name)
+        time.sleep(2)
+    
+    wallet = connect_rpc(wallet_name)
+except Exception as e:
+    print(f"Connection failed: {e}")
+    exit()
+
+# Generate mining address
+mining_address = wallet.getnewaddress()
+print(f"Mining address: {mining_address}")
+
+# Mine 101 blocks to get 1 mature coinbase (50 BTC)
+print("Mining initial blocks...")
+wallet.generatetoaddress(101, mining_address)
+time.sleep(2)
+
+# Mine 1 more block to ensure maturity
+wallet.generatetoaddress(1, mining_address)
+time.sleep(2)
+
+# Select UTXOs (2 × 50 BTC)
+utxos = wallet.listunspent()
+required_amount = Decimal('100.00000000')
+selected_utxos = []
+total_input = Decimal(0)
+
+for utxo in utxos:
+    if utxo['amount'] == Decimal('50.00000000') and len(selected_utxos) < 2:
+        selected_utxos.append({"txid": utxo["txid"], "vout": utxo["vout"]})
+        total_input += Decimal(utxo['amount'])
+    if len(selected_utxos) == 2:
+        break
+
+if total_input < required_amount:
+    raise Exception("Insufficient mature UTXOs")
+
+# Build transaction outputs
+outputs = {
+    "bcrt1qq2yshcmzdlznnpxx258xswqlmqcxjs4dssfxt2": float(required_amount),
+    "data": "We are all Satoshi!!".encode().hex()
+}
+
+# Calculate exact fee
+raw_tx = wallet.createrawtransaction(selected_utxos, outputs)
+decoded = wallet.decoderawtransaction(raw_tx)
+tx_vsize = decoded['vsize']
+fee = Decimal(tx_vsize * 21) / Decimal(1e8)  # 21 sats/vbyte
+
+# Add change output
+change_address = wallet.getnewaddress()
+outputs[change_address] = float(total_input - required_amount - fee)
+
+# Create final transaction
+raw_tx = wallet.createrawtransaction(selected_utxos, outputs)
+signed_tx = wallet.signrawtransactionwithwallet(raw_tx)
+
+if not signed_tx['complete']:
+    raise Exception("Signing failed")
+
+# Broadcast and save TXID
+txid = wallet.sendrawtransaction(signed_tx['hex'])
+with open("out.txt", "w") as f:
+    f.write(txid)
+
+print(f"Success! TXID: {txid}")
+print(f"Fee: {fee:.8f} BTC ({tx_vsize}vB × 21 sats/vB)")
