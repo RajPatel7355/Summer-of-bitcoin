@@ -1,0 +1,154 @@
+import hashlib
+import struct
+from ecdsa import SigningKey, SECP256k1
+from ecdsa.util import sigencode_der
+import base58
+
+# Helper functions
+def serialize_varint(n):
+    if n < 0xfd:
+        return bytes([n])
+    elif n <= 0xffff:
+        return b'\xfd' + struct.pack('<H', n)
+    elif n <= 0xffffffff:
+        return b'\xfe' + struct.pack('<I', n)
+    else:
+        return b'\xff' + struct.pack('<Q', n)
+
+# ========== Key Fix 1: Correct witness program construction ==========
+
+redeem_script_hex = '5221032ff8c5df0bc00fe1ac2319c3b8070d6d1e04cfbf4fedda499ae7b775185ad53b21039bbc8d24f89e5bc44c5b0d1980d6658316a6b2440023117c3c03a4975b04dd5652ae'
+redeem_script = bytes.fromhex(redeem_script_hex)
+witness_program = bytes([0x00, 0x20]) + hashlib.sha256(redeem_script).digest()
+
+# ========== Key Fix 2: Correct scriptSig construction ==========
+
+script_sig = serialize_varint(len(witness_program)) + witness_program
+
+# ========== Key Fix 3: Proper input address derivation ==========
+
+# Derive P2SH address from witness program
+hash160 = hashlib.new('ripemd160', hashlib.sha256(witness_program).digest()).digest()
+input_address = base58.b58encode_check(b'\x05' + hash160).decode()
+
+# Debugging print for derived P2SH address
+print(f"Derived P2SH Address: {input_address}")
+
+# Transaction components
+tx_version = 2
+tx_inputs = [{
+    'prev_txid': bytes.fromhex('0'*64),
+    'prev_index': 0,
+    'script_sig': script_sig,
+    'sequence': 0xffffffff
+}]
+
+# ========== Key Fix 4: Proper output script verification ==========
+
+# Verify output address matches requirements
+output_address = '325UUecEQuyrTd28Xs2hvAxdAjHM7XzqVF'
+decoded = base58.b58decode_check(output_address)
+output_hash160 = decoded[1:]
+script_pubkey = bytes([0xa9, 0x14]) + output_hash160 + bytes([0x87])
+
+# Debugging print for scriptPubKey
+print(f"Output ScriptPubKey: {script_pubkey.hex()}")
+
+tx_outputs = [{
+    'value': 100000,  # 0.001 BTC in satoshis
+    'script_pubkey': script_pubkey
+}]
+
+# ========== Key Fix 5: Correct sighash calculation ==========
+
+# BIP143 sighash computation
+prevouts = hashlib.sha256(hashlib.sha256(b''.join(
+    [txin['prev_txid'] + struct.pack('<I', txin['prev_index']) for txin in tx_inputs]
+)).digest()).digest()
+
+sequences = hashlib.sha256(hashlib.sha256(b''.join(
+    struct.pack('<I', txin['sequence']) for txin in tx_inputs
+)).digest()).digest()
+
+scriptCode = serialize_varint(len(redeem_script)) + redeem_script
+
+outputs = hashlib.sha256(hashlib.sha256(b''.join(
+    [struct.pack('<Q', txout['value']) + serialize_varint(len(txout['script_pubkey'])) + txout['script_pubkey']
+    for txout in tx_outputs]
+)).digest()).digest()
+
+preimage = (
+    struct.pack('<I', tx_version) +
+    prevouts +
+    sequences +
+    tx_inputs[0]['prev_txid'] +
+    struct.pack('<I', tx_inputs[0]['prev_index']) +
+    scriptCode +
+    struct.pack('<Q', 100000) +  # UTXO value
+    struct.pack('<I', tx_inputs[0]['sequence']) +
+    outputs +
+    struct.pack('<I', 0) +  # locktime
+    struct.pack('<I', 0x01)  # SIGHASH_ALL
+)
+
+sighash = hashlib.sha256(hashlib.sha256(preimage).digest()).digest()
+
+# Debugging print for sighash
+print(f"Sighash: {sighash.hex()}")
+
+# Generate signatures
+priv1 = SigningKey.from_string(bytes.fromhex('39dc0a9f0b185a2ee56349691f34716e6e0cda06a7f9707742ac113c4e2317bf'), curve=SECP256k1)
+sig1 = priv1.sign_digest(sighash, sigencode=sigencode_der) + bytes([0x01])
+
+priv2 = SigningKey.from_string(bytes.fromhex('5077ccd9c558b7d04a81920d38aa11b4a9f9de3b23fab45c3ef28039920fdd6d'), curve=SECP256k1)
+sig2 = priv2.sign_digest(sighash, sigencode=sigencode_der) + bytes([0x01])
+
+# Debugging print for signatures
+print(f"Signature 1: {sig1.hex()}")
+print(f"Signature 2: {sig2.hex()}")
+
+# ========== Key Fix 6: Correct witness ordering ==========
+
+# Correct witness order as per the redeem script (pubKey2 -> sig2, pubKey1 -> sig1)
+witness = [
+    b'',  # Multisig dummy element
+    sig2,  # Signature for privKey2 (corresponding to pubKey2)
+    sig1,  # Signature for privKey1 (corresponding to pubKey1)
+    redeem_script
+]
+
+# Debugging print for witness stack
+print(f"Witness stack: {[w.hex() for w in witness]}")
+
+# Transaction serialization
+tx_bytes = bytearray()
+tx_bytes += struct.pack('<I', tx_version)
+tx_bytes += b'\x00\x01'  # SegWit marker and flag
+
+# Inputs
+tx_bytes += serialize_varint(len(tx_inputs))
+for txin in tx_inputs:
+    tx_bytes += txin['prev_txid']
+    tx_bytes += struct.pack('<I', txin['prev_index'])
+    tx_bytes += serialize_varint(len(txin['script_sig'])) + txin['script_sig']
+    tx_bytes += struct.pack('<I', txin['sequence'])
+
+# Outputs
+tx_bytes += serialize_varint(len(tx_outputs))
+for txout in tx_outputs:
+    tx_bytes += struct.pack('<Q', txout['value'])
+    tx_bytes += serialize_varint(len(txout['script_pubkey'])) + txout['script_pubkey']
+
+# Witness
+tx_bytes += serialize_varint(len(witness))
+for item in witness:
+    tx_bytes += serialize_varint(len(item)) + item
+
+tx_bytes += struct.pack('<I', 0)  # locktime
+
+# Save the serialized transaction hex to a file for debugging
+with open('out.txt', 'w') as f:
+    f.write(tx_bytes.hex())
+
+# Debugging print for the full serialized transaction
+print(f"Serialized Transaction: {tx_bytes.hex()}")
